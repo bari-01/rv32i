@@ -41,6 +41,7 @@
 //https://docs.riscv.org/reference/isa/unpriv/_images/svg-6e79131cf8a4d97ce98f508a368da764a7b11e95.svg
 uint32_t x[32] = {0};
 uint32_t programcounter = 0;
+uint32_t pc_inst = 0;
 
 uint8_t memory[1048576] = {0};
 
@@ -82,6 +83,7 @@ void op_imm(uint32_t instr) {
     }
     default: { illegal(instr); break; }
   }
+  programcounter += 4;
   x[0] = 0;
 }
 
@@ -119,6 +121,7 @@ void op(uint32_t instr) {
     }
     default: { illegal(instr); break; }
   }
+  programcounter += 4;
   x[0] = 0;
 }
 
@@ -128,13 +131,15 @@ void lui(uint32_t instr) {
   int32_t imm_u = instr & 0xFFFFF000;
   x[rd] = (int32_t)imm_u;
   x[0] = 0;
+  programcounter += 4;
 }
 
 void auipc(uint32_t instr) {
   uint32_t rd     = bits(instr, 11, 7); //(instr >> 7)  & 0x1F;   // bits 11:7
   int32_t imm_u = instr & 0xFFFFF000;
-  x[rd] = programcounter + (int32_t)imm_u;
+  x[rd] = pc_inst + (int32_t)imm_u;
   x[0] = 0;
+  programcounter += 4;
 }
 
 void jal(uint32_t instr) {
@@ -143,7 +148,7 @@ void jal(uint32_t instr) {
       (bits(instr, 19, 12)<< 12) |
       (bits(instr, 20, 20)<< 11) |
       (bits(instr, 30, 21)<< 1) ,21);
-  x[rd] = (int32_t)programcounter+4;
+  x[rd] = (int32_t)pc_inst+4;
   programcounter += imm_j;
   x[0] = 0;
 }
@@ -152,9 +157,10 @@ void jalr(uint32_t instr) {
   uint32_t rd     = bits(instr, 11, 7); //(instr >> 7)  & 0x1F;   // bits 11:7
   uint32_t rs1    = bits(instr, 19, 15); //(instr >> 15) & 0x1F;   // bits 19:15
   int32_t imm_i = sext(bits(instr, 31, 20), 12); //(int32_t)instr >> 20;
-  x[rd] = (int32_t)programcounter+4;
-  //programcounter = (x[rs1]+sext(imm_i, 12));
+                                                 //programcounter = (x[rs1]+sext(imm_i, 12));
+  uint32_t next = programcounter + 4;
   programcounter = (x[rs1] + imm_i) & ~1;
+  x[rd] = next;
   x[0] = 0;
 }
 
@@ -207,6 +213,8 @@ void load(uint32_t instr) {
     }
     default: { illegal(instr); break; }
   }
+  programcounter += 4;
+  x[0] = 0;
 }
 
 void store(uint32_t instr) {
@@ -236,15 +244,81 @@ void store(uint32_t instr) {
     }
     default: { illegal(instr); break; }
   }
+  programcounter += 4;
 }
 
+//void env(uint32_t instr) {
+//  int32_t imm_i = sext(bits(instr, 31, 20), 12); //(int32_t)instr >> 20;
+//  switch (imm_i) {
+//    case 0x0: { exit(1); break; } //ECALL
+//    case 0x1: { exit(1); break; } //EBREAK
+//    default: { illegal(instr); break; }
+//  }
+//}
+
 void env(uint32_t instr) {
-  int32_t imm_i = sext(bits(instr, 31, 20), 12); //(int32_t)instr >> 20;
-  switch (imm_i) {
-    case 0x0: { exit(1); break; } //ECALL
-    case 0x1: { exit(1); break; } //EBREAK
-    default: { illegal(instr); break; }
+  int32_t imm_i = sext(bits(instr, 31, 20), 12);
+
+  if (imm_i != 0) {
+    illegal(instr);
+    return;
   }
+
+  uint32_t syscall = x[17]; // a7
+
+  switch (syscall) {
+
+    // exit(int code)
+    case 93: {
+      uint32_t code = x[10]; // a0
+      printf("\n[exit %u]\n", code);
+      exit(code);
+    }
+
+    // write(int fd, const void *buf, size_t count)
+    case 64: {
+      uint32_t fd    = x[10]; // a0
+      uint32_t addr  = x[11]; // a1
+      uint32_t len   = x[12]; // a2
+
+      if (fd == 1 || fd == 2) { // stdout / stderr
+        for (uint32_t i = 0; i < len; i++)
+          putchar(memory[addr + i]);
+        fflush(stdout);
+        x[10] = len; // return bytes written
+      } else {
+        x[10] = -1;
+      }
+      break;
+    }
+
+    // read(int fd, void *buf, size_t count)
+    case 63: {
+      uint32_t fd    = x[10]; // a0
+      uint32_t addr  = x[11]; // a1
+      uint32_t len   = x[12]; // a2
+
+      if (fd == 0) { // stdin
+        uint32_t i;
+        for (i = 0; i < len; i++) {
+          int c = getchar();
+          if (c == EOF) break;
+          memory[addr + i] = (uint8_t)c;
+        }
+        x[10] = i; // bytes read
+      } else {
+        x[10] = -1;
+      }
+      break;
+    }
+
+    default:
+      printf("Unknown syscall %u\n", syscall);
+      x[10] = -1;
+      break;
+  }
+  programcounter += 4;
+  x[0] = 0;
 }
 
 void fence(uint32_t instr) {
@@ -254,6 +328,8 @@ void fence(uint32_t instr) {
     case 0b100000110011: { break; } //FENCE.TSO
                                     //case _: { break; } //FENCE
   }
+  printf("fence");
+  programcounter += 4;
 }
 
 typedef void (*OpHandler)(uint32_t instr);
@@ -286,26 +362,61 @@ void dump_reg() {
 }
 
 
+void load_binary(const char *path, uint32_t load_addr) {
+  FILE *f = fopen(path, "rb");
+  if (!f) {
+    perror("fopen");
+    exit(1);
+  }
+
+  fseek(f, 0, SEEK_END);
+  long size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+
+  if (load_addr + size > sizeof(memory)) {
+    printf("Binary too large\n");
+    exit(1);
+  }
+
+  fread(&memory[load_addr], 1, size, f);
+  fclose(f);
+
+  programcounter = load_addr;
+
+  printf("Loaded %ld bytes at 0x%08x\n", size, load_addr);
+}
+
+
 int main(int argc, char *argv[]) {
+  if (argc < 2) {
+    printf("usage: %s program.bin\n", argv[0]);
+    return 1;
+  }
+
   memset(x, 0, sizeof(x));
-  programcounter = 0;
   memset(memory, 0, sizeof(memory));
 
+  load_binary(argv[1], 0x0);
+
   while (1) {
-    uint32_t pc = programcounter;
     uint32_t instr =
       memory[programcounter + 0] |
       (memory[programcounter + 1] << 8) |
       (memory[programcounter + 2] << 16) |
       (memory[programcounter + 3] << 24);
     uint32_t opcode = instr & 0x7F;
+    printf("%u\n", opcode);
     if (!opcode_table[opcode]) {
       printf("Illegal opcode %02x at pc=%08x\n", opcode, programcounter);
       exit(1);
     }
+    pc_inst = programcounter; 
     opcode_table[opcode](instr);
-    if (programcounter == pc)
-      programcounter += 4;
+    //if (programcounter == pc)
+    if (programcounter & 3) {
+      printf("PC misaligned: %08x\n", programcounter);
+      exit(1);
+    }
   }
   //uint32_t instr = 0b11111111110000001000001010010011;
 
