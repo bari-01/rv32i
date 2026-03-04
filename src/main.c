@@ -5,12 +5,12 @@
 
 #include "funct.h"
 
-//https://docs.riscv.org/reference/isa/unpriv/_images/svg-6e79131cf8a4d97ce98f508a368da764a7b11e95.svg
+//https://docs.riscv.org/reference/isa/unpriv/_images/svg-6e79131cf8a4d97ce98f508a368da764a7b11e95.sv
 uint32_t x[32] = {0};
 uint32_t programcounter = 0;
 uint32_t pc_inst = 0;
 
-uint8_t memory[1048576] = {0};
+uint8_t memory[262144] = {0};
 
 static inline uint32_t bits(uint32_t x, int hi, int lo) {
   return (x >> lo) & ((1u << (hi - lo + 1)) - 1);
@@ -116,7 +116,7 @@ void jal(uint32_t instr) {
       (bits(instr, 20, 20)<< 11) |
       (bits(instr, 30, 21)<< 1) ,21);
   x[rd] = (int32_t)pc_inst+4;
-  programcounter += imm_j;
+  programcounter = pc_inst + imm_j;
   x[0] = 0;
 }
 
@@ -125,7 +125,7 @@ void jalr(uint32_t instr) {
   uint32_t rs1    = bits(instr, 19, 15); //(instr >> 15) & 0x1F;   // bits 19:15
   int32_t imm_i = sext(bits(instr, 31, 20), 12); //(int32_t)instr >> 20;
                                                  //programcounter = (x[rs1]+sext(imm_i, 12));
-  uint32_t next = programcounter + 4;
+  uint32_t next = pc_inst + 4;
   programcounter = (x[rs1] + imm_i) & ~1;
   x[rd] = next;
   x[0] = 0;
@@ -140,12 +140,12 @@ void branch(uint32_t instr) {
       (bits(instr, 30, 25)<< 5)  |
       (bits(instr, 11, 8) << 1), 13);
   switch(funct3) {
-    case F3_BEQ: { programcounter += (x[rs1] == x[rs2]) ? imm_b : 4; break; }
-    case F3_BNE: { programcounter += (x[rs1] != x[rs2]) ? imm_b : 4; break; }
-    case F3_BLT: { programcounter += (x[rs1] < (int32_t)x[rs2]) ? imm_b : 4; break; }
-    case F3_BLTU: { programcounter += (x[rs1] < x[rs2]) ? imm_b : 4; break; }
-    case F3_BGE: { programcounter += (x[rs1] >= (int32_t)x[rs2]) ? imm_b : 4; break; }
-    case F3_BGEU: { programcounter += (x[rs1] >= x[rs2]) ? imm_b : 4; break; }
+    case F3_BEQ: { programcounter = pc_inst + ((x[rs1] == x[rs2]) ? imm_b : 4); break; }
+    case F3_BNE: { programcounter = pc_inst + ((x[rs1] != x[rs2]) ? imm_b : 4); break; }
+    case F3_BLT: { programcounter = pc_inst + (((int32_t)x[rs1] < (int32_t)x[rs2]) ? imm_b : 4); break; }
+    case F3_BLTU: {programcounter = pc_inst + ((x[rs1] < x[rs2]) ? imm_b : 4); break; }
+    case F3_BGE: { programcounter = pc_inst + (((int32_t)x[rs1] >= (int32_t)x[rs2]) ? imm_b : 4); break; }
+    case F3_BGEU: {programcounter = pc_inst + ((x[rs1] >= x[rs2]) ? imm_b : 4); break; }
     default: { illegal(instr); break; }
   }
 }
@@ -156,6 +156,7 @@ void load(uint32_t instr) {
   uint32_t funct3 = bits(instr, 14, 12); //(instr >> 12) & 0x07;   // bits 14:12
   int32_t imm_i = sext(bits(instr, 31, 20), 12); //(int32_t)instr >> 20;
   uint32_t addr = x[rs1] + imm_i; 
+  //if (srd == 1) printf("load ra <- %u from %u\n", imm_i, addr);
   switch(funct3) {
     case F3_LB: {
       x[srd] = sext(memory[addr], 8);
@@ -192,6 +193,7 @@ void store(uint32_t instr) {
       bits(instr, 11, 7),
       12);
   uint32_t addr =  x[rs1] + imm_s;
+  //if (rs2 == 1) printf("store ra %u -> %u\n", x[rs2], addr);
   switch(funct3) {
     case F3_SB: {
       memory[addr] = x[rs2] & 0xFF;
@@ -315,6 +317,16 @@ OpHandler opcode_table[256] = {
   [0b0001111] = fence,
 };
 
+void dump_binary(int num) {
+    for (int i = (sizeof(int) * 8) - 1; i >= 0; i--) {
+        printf("%d", (num >> i) & 1);
+        if (i % 4 == 0) {
+            printf(" ");
+        }
+    }
+    printf("\n");
+}
+
 void dump_reg() {
   printf("unsigned: ");
   for (int i=0; i<32; i++) {
@@ -337,7 +349,7 @@ void load_binary(const char *path, uint32_t load_addr) {
   }
 
   fseek(f, 0, SEEK_END);
-  long size = ftell(f);
+  long unsigned size = ftell(f);
   fseek(f, 0, SEEK_SET);
 
   if (load_addr + size > sizeof(memory)) {
@@ -349,6 +361,7 @@ void load_binary(const char *path, uint32_t load_addr) {
   fclose(f);
 
   programcounter = load_addr;
+  pc_inst = programcounter;
 
   printf("Loaded %ld bytes at 0x%08x\n", size, load_addr);
 }
@@ -362,6 +375,7 @@ int main(int argc, char *argv[]) {
 
   memset(x, 0, sizeof(x));
   memset(memory, 0, sizeof(memory));
+  x[2] = sizeof(memory); //stack pointer
 
   load_binary(argv[1], 0x0);
 
@@ -372,7 +386,9 @@ int main(int argc, char *argv[]) {
       (memory[programcounter + 2] << 16) |
       (memory[programcounter + 3] << 24);
     uint32_t opcode = instr & 0x7F;
-    printf("%u\n", opcode);
+    //printf("instr: ");dump_binary(instr);
+    //dump_reg();
+    //printf("pc: %u\n", programcounter);
     if (!opcode_table[opcode]) {
       printf("Illegal opcode %02x at pc=%08x\n", opcode, programcounter);
       exit(1);
@@ -385,12 +401,5 @@ int main(int argc, char *argv[]) {
       exit(1);
     }
   }
-  //uint32_t instr = 0b11111111110000001000001010010011;
-
-  //uint32_t opcode =  bits(instr, 6, 0);//instr        & 0x7F; 
-  //dump_reg();
-  ////i_andi(0xFFC08293);
-  //opcode_table[opcode](instr);
-  //dump_reg();
   return 0;
 }
