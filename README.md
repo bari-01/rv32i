@@ -38,7 +38,7 @@ riscv32-unknown-elf-objdump -d fib.elf
  3e0:   ff010113                addi    sp,sp,-16
 ...
 ```
-Replace programcounter = load_addr with programcounter = <location of _start> in void load_binary. [Build](#building) the emulator and run:
+Replace `programcounter = load_addr` with `programcounter = <location of _start>` in `void load_binary`. [Build](#building) the emulator and run:
 ```
 ./main fib.bin
 ```
