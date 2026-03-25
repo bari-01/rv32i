@@ -4,11 +4,10 @@ LDFLAGS :=
 
 TARGET := main
 
-SRCS := src/main.c
+SRCS := src/main.c src/guest.c
 OBJS := $(SRCS:.c=.o)
 
 all: $(TARGET)
-	./main
 
 $(TARGET): $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^
