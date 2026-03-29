@@ -26,7 +26,7 @@ clang --target=riscv32 -march=rv32i -mabi=ilp32 -o fib.o -c fi.c  # or clang
 riscv32-unknown-elf-ld -Ttext=0x0 fib.o -o fib.elf
 riscv32-unknown-elf-objcopy -O binary fib.elf fib.bin
 ```
-Check for the location of _start in the objdump:
+Check for the location of \_start in the objdump:
 ```
 riscv32-unknown-elf-objdump -d fib.elf
 ```
